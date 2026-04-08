@@ -1,3 +1,6 @@
 [submodule "pi1_pairs-Tenk10K"]
 	path = pi1_pairs-Tenk10K
 	url = https://github.com/BradleyH017/pi1_pairs-Tenk10K.git
+[submodule "IBDVerse-sc-eQTL-code"]
+	path = IBDVerse-sc-eQTL-code
+	url = https://github.com/andersonlab/IBDVerse-sc-eQTL-code.git
