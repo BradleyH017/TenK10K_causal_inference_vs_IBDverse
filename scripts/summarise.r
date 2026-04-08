@@ -5,13 +5,15 @@
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
+library(data.table)
+library(ggrepel)
 
 # Hard code paths
-repo.dir <- '../IBDVerse-sc-eQTL-code/'
+repo.dir <- 'IBDVerse-sc-eQTL-code/'
 data.dir <- paste0(repo.dir,'data/')
 coloc.dir <- '/lustre/scratch127/humgen/projects_v2/sc-eqtl-ibd/analysis/bradley_analysis/IBDverse/snakemake_coloc/results/2025_06_11_IBDverse_coloc_all_gwas/collapsed/'
 henry_mr <- 'data/tenk10k_crohns_mr_genes.tsv'
-metaf = paste0(data.dir, "eqtl_metadata.txt.gz")
+metaf = "/lustre/scratch127/humgen/projects_v2/sc-eqtl-ibd/analysis/bradley_analysis/IBDverse/IBDVerse-sc-eQTL-code/data/eqtl_metadata.txt.gz" # Didn't want to back up this big file
 source(paste0(repo.dir,'qtl_plot/helper_functions.R'))
 pi1f = "pi1_pairs-Tenk10K/results/pi1_all.txt"
 tenk_annotation = "data/tenk10k_cell_type_annotation.tsv"
@@ -39,6 +41,7 @@ ibdverse_sub <- known.coloc.df %>%
 
 # Load the sets of genes nominated by Tenk10K (coloc and MR)
 mr = read.delim(henry_mr)
+mr_genes = unique(mr$ensembl_gene_id)
 
 # Calculate the novelty of genes in TenK10K vs IBDverse
 ibdverse_genes = ibdverse_sub %>%
@@ -49,45 +52,40 @@ all_sub_de = length(unique(mr$ensembl_gene_id))
 all_sub_novel_de = length(setdiff(unique(mr$ensembl_gene_id), ibdverse_genes))
 
 cats = unique(known.coloc.df$category_new)
-tenk_novel_all = do.call(rbind, lapply(cats, function(x){
-    print(paste0("Testing against: ", x))
+cats = cats[-grep("All Cells", cats)]
+tenk_not_novel_res = do.call(rbind, lapply(cats, function(x){
+  print(paste0("Processing category: ", x))
+  
+  # Get n effector genes
+  de = ibdverse_sub %>% 
+    filter(category_new == !!x) %>% 
+    pull(phenotype_id) %>% 
+    unique()
+  nde = length(de)
 
-    # Get n effector genes (TenK10K vs IBDverse)
-    de = mr %>%
-        pull(ensembl_gene_id) %>%
-        unique()
+  # Get novel effector genes 
+  notnovelde = intersect(de, mr_genes)
 
-    nde = length(de)
-
-    # Get novel effector genes for this category
-    ibdv_sub = ibdverse_sub %>%
-        filter(category_new == x) %>%
-        pull(phenotype_id) %>%
-        unique()
-
-    novelde = setdiff(de, ibdv_sub)
-
-    # Make contingency
-    a <- length(novelde)
-    b <- length(setdiff(all_sub_novel_de, novelde))
-    c <- length(setdiff(de, novelde))
-    d <- length(setdiff(all_sub_de, union(de, all_sub_novel_de)))
-
-    contingency <- matrix(c(a, b, c, d), nrow = 2,
+  # Make contingency
+  a <- length(notnovelde)
+  b <- length(setdiff(all_sub_novel_de, notnovelde))
+  c <- length(setdiff(de, notnovelde))
+  d <- length(setdiff(all_sub_de, union(de, all_sub_novel_de)))
+  
+  contingency <- matrix(c(a, b, c, d), nrow = 2,
                         dimnames = list(
-                            disease_effector = c("in_dataset", "not_in_dataset"),
-                            novel_disease_effector   = c("in_dataset", "not_in_dataset")
+                          disease_effector = c("in_dataset", "not_in_dataset"),
+                          novel_disease_effector   = c("in_dataset", "not_in_dataset")
                         ))
 
-    fishres = fisher.test(contingency)
-    or = fishres$estimate
-    res = data.frame(category = x, nde = nde, n_novelde = length(novelde), OR=or)
-    return(res)
+  fishres = fisher.test(contingency)
+  or = fishres$estimate
+  res = data.frame(category = x, nde = nde, n_notnovelde = length(notnovelde), OR=or)
+  return(res)
 
 }))
 
 # Append the proportion of cells from from each major population which come from blood samples
-
 cellmeta = fread(metaf)
 prop_blood = cellmeta %>%
   group_by(predicted_category) %>%
@@ -100,6 +98,38 @@ prop_blood = cellmeta %>%
   ) %>%
   select(predicted_category, prop_blood) %>%
   mutate(predicted_category = gsub("_ct", "", predicted_category))
+
+tenk_not_novel_res = tenk_not_novel_res %>%
+  left_join(prop_blood, by = c("category" = "predicted_category")) 
+
+write.table(tenk_not_novel_res, paste0(out.dir, "/tenk_not_novel_res.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+
+tenk_not_novel_res = tenk_not_novel_res %>% 
+    filter(is.finite(OR)) # MESENCHYMAL has OR of Inf
+
+lm_fit <- lm(OR ~ log10(prop_blood), data = tenk_not_novel_res)
+slope <- signif(coef(lm_fit)[[2]], 3)
+pval <- signif(summary(lm_fit)$coefficients["log10(prop_blood)", "Pr(>|t|)"], 3)
+# Print
+print(paste0("Slope: ", slope, ". p=", pval))
+
+# Plot this
+tenk_not_novel_res$annotation_type = "Major population"
+ggplot(tenk_not_novel_res, aes(x = log10(prop_blood), y = OR)) + 
+  geom_point(aes(fill = category, size = annotation_type), shape = 21, stroke = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed", linewidth = 0.5) + 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "lightgrey", linewidth = 0.5) +
+  geom_text_repel(aes(label = category), size = 4, max.overlaps = Inf, point.padding = unit(5, "lines")) +
+  scale_size_manual(values = annot.class.sizes, name = 'Annotation granularity') +
+  scale_fill_manual(values = umap.category.palette, name = 'Major population') +
+  labs(
+    x = "log10 fraction of cells derived from blood samples",
+    y ="Odds ratio for IBDverse disease effector gene\nalready found in TenK10K"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggsave(paste0(out.dir,"/Blood_proportion_vs_notnovelDE_in_Henry-OR.png"), width = 6.5, height = 5)
 
 
 ###############
