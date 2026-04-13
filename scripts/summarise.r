@@ -62,7 +62,7 @@ cats = cats[-grep("All Cells", cats)]
 # novel: if TRUE, tests enrichment for novelty (not in external); if FALSE, tests enrichment for non-novelty (in external)
 # relative: if FALSE (default), anchors the not-novel background to the full external gene set (comparison vs external dataset);
 #           if TRUE, restricts background to IBDverse only (comparison relative to other IBDverse categories)
-compute_novelty_or <- function(ibdverse_df, external_genes, ibdverse_all_genes, cats, cat_col, novel = TRUE, relative = FALSE) {
+compute_novelty_or <- function(ibdverse_df, external_genes, ibdverse_all_genes, cats, cat_col, novel = TRUE, relative = FALSE, path = NULL, prefix = NULL) {
   do.call(rbind, lapply(cats, function(x) {
     de = ibdverse_df %>%
       filter(!!sym(cat_col) == x) %>%
@@ -114,19 +114,30 @@ compute_novelty_or <- function(ibdverse_df, external_genes, ibdverse_all_genes, 
 
     contingency <- matrix(c(a, b, c, d), nrow = 2,
                           dimnames = list(
-                            disease_effector = c("in_dataset", "not_in_dataset"),
-                            focal_disease_effector = c("in_dataset", "not_in_dataset")
+                            category = c(paste0("in_", x), paste0("not_in_", x)),
+                            external_gene_set = c("in_external", "not_in_external")
                           ))
 
+    if (!is.null(path) && !is.null(prefix)) {
+      out_f = file.path(path, paste0(prefix, "_", gsub("[^A-Za-z0-9_]", "_", x), "_contingency.tsv"))
+      write.table(as.data.frame(contingency), out_f, sep = "\t", quote = FALSE, col.names = NA)
+    }
+
     fishres = fisher.test(contingency)
-    res = data.frame(category = x, nde = nde, OR = fishres$estimate)
+    res = data.frame(category = x, nde = nde, OR = fishres$estimate,
+                     CI_low = fishres$conf.int[1], CI_high = fishres$conf.int[2],
+                     pval = fishres$p.value)
     res[[col_name]] <- n_focal
     return(res)
   }))
 }
 
 # Are IBDverse cat genes enriched for novelty vs mr_genes?
-mr_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = TRUE)
+cont_dir = paste0(out.dir, "/novelty_contingency_tables")
+if(!dir.exists(cont_dir)){
+    dir.create(cont_dir)
+}
+mr_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = TRUE, relative = FALSE, path = cont_dir, prefix = "mr_novelty_IBDv_vs_TenK10K")
 
 # Append proportion of cells from blood
 prop_blood_f = paste0(out.dir, "/prop_blood_ibdverse.csv")
@@ -183,7 +194,7 @@ ggplot(mr_novel_res, aes(x = log10(prop_blood), y = OR)) +
 ggsave(paste0(out.dir,"/Blood_proportion_vs_novelDE_in_Henry-OR.png"), width = 6.5, height = 5)
 
 # Are IBDverse cat genes enriched for non-novelty vs mr_genes?
-tenk_not_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = FALSE)
+tenk_not_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = FALSE, relative = FALSE, path = cont_dir, prefix = "mr_non_novelty_IBDv_vs_TenK10K")
 
 # Append the proportion of cells from from each major population which come from blood samples
 tenk_not_novel_res = tenk_not_novel_res %>%
@@ -219,7 +230,7 @@ ggplot(tenk_not_novel_res, aes(x = log10(prop_blood), y = OR)) +
 ggsave(paste0(out.dir,"/Blood_proportion_vs_notnovelDE_in_Henry-OR.png"), width = 6.5, height = 5)
 
 # Are IBDverse cat genes RELATIVELY enriched for non-novelty vs other IBDverse categories?
-tenk_not_novel_rel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = FALSE, relative = TRUE)
+tenk_not_novel_rel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = FALSE, relative = TRUE, path = cont_dir, prefix = "mr_non_novelty_relative_IBDv_vs_TenK10K")
 
 write.table(tenk_not_novel_rel_res, paste0(out.dir, "/tenk_not_novel_res_relative.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 
@@ -264,6 +275,9 @@ pi1 = read.delim(pi1f) %>%
         annot.mapping %>% 
             select(label_machine, label_new, category_new)
     ) 
+
+# Save annot mapping
+write.table(annot.mapping, paste0(out.dir, "/IBDverse_annotation_map.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 
 # Build labelled subsets for each comparison, then combine
 pi1_max_all = pi1 %>%
