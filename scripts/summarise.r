@@ -145,16 +145,16 @@ if(!file.exists(prop_blood_f)){
     print("..Loading the big raw meta")
     cellmeta = fread(metaf)
     prop_blood = cellmeta %>%
-    group_by(predicted_category) %>%
-    summarise(
-        total_cells = n(),
-        blood_cells = sum(tissue == "blood")
-    ) %>%
-    mutate(
-        prop_blood = blood_cells / total_cells
-    ) %>%
-    select(predicted_category, prop_blood) %>%
-    mutate(predicted_category = gsub("_ct", "", predicted_category))
+      group_by(predicted_category) %>%
+      summarise(
+          total_cells = n(),
+          blood_cells = sum(tissue == "blood")
+      ) %>%
+      mutate(
+          prop_blood = blood_cells / total_cells
+      ) %>%
+      select(predicted_category, prop_blood) %>%
+      mutate(predicted_category = gsub("_ct", "", predicted_category))
 
     write.csv(prop_blood, paste0(out.dir, "/prop_blood_ibdverse.csv"), row.names = FALSE)
 
@@ -193,9 +193,83 @@ ggplot(mr_novel_res, aes(x = log10(prop_blood), y = OR)) +
 
 ggsave(paste0(out.dir,"/Blood_proportion_vs_novelDE_in_Henry-OR.png"), width = 6.5, height = 5)
 
+# Novelty at cell-type level
+cts = unique(known.coloc.df$label_new)
+mr_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cts, "label_new", novel = TRUE, relative = TRUE, path = cont_dir, prefix = "mr_novelty_IBDv_vs_TenK10K_relative_celltype")
+mr_novel_res = mr_novel_res %>% 
+  rename(label_new = category)
+
+cellmeta = fread(metaf)
+prop_blood = cellmeta %>%
+  group_by(predicted_labels) %>%
+  summarise(
+      total_cells = n(),
+      blood_cells = sum(tissue == "blood")
+  ) %>%
+  mutate(
+      prop_blood = blood_cells / total_cells
+  ) %>%
+  select(predicted_labels, prop_blood) %>%
+  mutate(predicted_labels = gsub("_ct", "", predicted_labels))
+
+mr_novel_res = mr_novel_res %>%
+  left_join(annot.mapping %>% 
+      select(label_machine, label_new, category_new) %>% 
+      mutate(
+        label_machine = gsub("_ct", "", label_machine),
+        label_machine = gsub("_blood", "", label_machine),
+        label_machine = gsub("_r", "", label_machine),
+        label_machine = gsub("_ti", "", label_machine)
+      ) %>%
+      distinct()) %>%
+  left_join(prop_blood, by = c("label_machine" = "predicted_labels")) 
+
+mr_novel_res = mr_novel_res %>% 
+    filter(is.finite(OR), OR > 0)
+
+# Add tiny pseudocount to prop blood
+mr_novel_res$prop_blood = mr_novel_res$prop_blood + 1e-5
+
+lm_fit <- lm(OR ~ log10(prop_blood), data = mr_novel_res)
+slope <- signif(coef(lm_fit)[[2]], 3)
+pval <- signif(summary(lm_fit)$coefficients["log10(prop_blood)", "Pr(>|t|)"], 3)
+# Print
+print(paste0("Slope: ", slope, ". p=", pval))
+
+# Plot this
+mr_novel_res$annotation_type = "Cell type"
+ggplot(mr_novel_res, aes(x = log10(prop_blood), y = OR)) + 
+  geom_point(aes(fill = category_new, size = annotation_type), shape = 21, stroke = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed", linewidth = 0.5) + 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "lightgrey", linewidth = 0.5) +
+  #geom_text_repel(aes(label = category), size = 4, max.overlaps = Inf, point.padding = unit(5, "lines")) +
+  scale_size_manual(values = annot.class.sizes, name = 'Annotation granularity') +
+  scale_fill_manual(values = umap.category.palette, name = 'Cell type') +
+  labs(
+    x = "log10 fraction of cells derived from blood samples",
+    y ="Odds ratio for IBDverse disease effector gene\nalready found in TenK10K"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggsave(paste0(out.dir,"/Blood_proportion_vs_novelDE_in_Henry-OR-Celltype.png"), width = 6.5, height = 5)
+
+
+#########
 # Are IBDverse cat genes enriched for non-novelty vs mr_genes?
 tenk_not_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cats, "category_new", novel = FALSE, relative = FALSE, path = cont_dir, prefix = "mr_non_novelty_IBDv_vs_TenK10K")
-
+prop_blood = cellmeta %>%
+      group_by(predicted_category) %>%
+      summarise(
+          total_cells = n(),
+          blood_cells = sum(tissue == "blood")
+      ) %>%
+      mutate(
+          prop_blood = blood_cells / total_cells
+      ) %>%
+      select(predicted_category, prop_blood) %>%
+      mutate(predicted_category = gsub("_ct", "", predicted_category))
+    
 # Append the proportion of cells from from each major population which come from blood samples
 tenk_not_novel_res = tenk_not_novel_res %>%
   left_join(prop_blood, by = c("category" = "predicted_category")) 
@@ -259,6 +333,69 @@ ggplot(tenk_not_novel_rel_res, aes(x = log10(prop_blood), y = OR)) +
   theme(legend.position = "none")
 
 ggsave(paste0(out.dir, "/Blood_proportion_vs_notnovelDE_in_Henry-OR_relative.png"), width = 6.5, height = 5)
+
+# Non-novelty at celltype level
+mr_novel_res = compute_novelty_or(ibdverse_sub, mr_genes, ibdverse_genes, cts, "label_new", novel = FALSE, relative = TRUE, path = cont_dir, prefix = "mr_non_novelty_IBDv_vs_TenK10K_relative_celltype")
+mr_novel_res = mr_novel_res %>% 
+  rename(label_new = category)
+
+#cellmeta = fread(metaf)
+prop_blood = cellmeta %>%
+  group_by(predicted_labels) %>%
+  summarise(
+      total_cells = n(),
+      blood_cells = sum(tissue == "blood")
+  ) %>%
+  mutate(
+      prop_blood = blood_cells / total_cells
+  ) %>%
+  select(predicted_labels, prop_blood) %>%
+  mutate(predicted_labels = gsub("_ct", "", predicted_labels))
+
+mr_novel_res = mr_novel_res %>%
+  left_join(annot.mapping %>% 
+      select(label_machine, label_new, category_new) %>% 
+      mutate(
+        label_machine = gsub("_ct", "", label_machine),
+        label_machine = gsub("_blood", "", label_machine),
+        label_machine = gsub("_r", "", label_machine),
+        label_machine = gsub("_ti", "", label_machine)
+      ) %>%
+      distinct()) %>%
+  left_join(prop_blood, by = c("label_machine" = "predicted_labels")) 
+
+write.table(mr_novel_res, paste0(out.dir, "/tenk_not_novel_res_relative_celltype.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
+
+mr_novel_res = mr_novel_res %>% 
+    filter(is.finite(OR), OR > 0)
+
+# Add tiny pseudocount to prop blood
+mr_novel_res$prop_blood = mr_novel_res$prop_blood + 1e-5
+
+lm_fit <- lm(OR ~ log10(prop_blood), data = mr_novel_res)
+slope <- signif(coef(lm_fit)[[2]], 3)
+pval <- signif(summary(lm_fit)$coefficients["log10(prop_blood)", "Pr(>|t|)"], 3)
+# Print
+print(paste0("Slope: ", slope, ". p=", pval))
+
+# Plot this
+mr_novel_res$annotation_type = "Cell type"
+ggplot(mr_novel_res, aes(x = log10(prop_blood), y = OR)) + 
+  geom_point(aes(fill = category_new, size = annotation_type), shape = 21, stroke = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed", linewidth = 0.5) + 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "lightgrey", linewidth = 0.5) +
+  #geom_text_repel(aes(label = category), size = 4, max.overlaps = Inf, point.padding = unit(5, "lines")) +
+  scale_size_manual(values = annot.class.sizes, name = 'Annotation granularity') +
+  scale_fill_manual(values = umap.category.palette, name = 'Cell type') +
+  labs(
+    x = "log10 fraction of cells derived from blood samples",
+    y ="Odds ratio for IBDverse disease effector gene\nalready found in TenK10K"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggsave(paste0(out.dir,"/Blood_proportion_vs_notnovelDE_in_Henry-OR_relative-Celltype.png"), width = 6.5, height = 5)
+
 
 ###############
 # Quantifying replication rates of eQTLs identified in Tenk10K vs IBDverse
